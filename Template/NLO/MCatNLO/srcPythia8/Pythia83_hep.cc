@@ -6,7 +6,7 @@
 #include "Pythia8Plugins/CombineMatchingInput.h"
 #include "HepMC/GenEvent.h"
 #include "HepMC/IO_GenEvent.h"
-#include <fstream>
+#include <sstream>
 #include <vector>
 
 using namespace Pythia8;
@@ -58,15 +58,19 @@ int main() {
     }
   }
 
-  // q-cut variation: detect non-empty qCutList, grab a typed pointer to the
-  // matching hook, and open the sidecar accept-flag file. Each row in the
-  // sidecar carries the HepMC event_number and one accept flag (1 = kept,
-  // 0 = vetoed) per q-cut variation, in the same order as qCutList. The
-  // q-cut grid is recorded in the header comment.
+  // q-cut variation: detect non-empty qCutList and grab a typed pointer to
+  // the matching hook. Per-event accept flags (1 = kept, 0 = vetoed) for
+  // each variation are written into the HepMC2 weight container under
+  // names "FxFx_qCutAccept_<value>". These are NOT cross-section reweight
+  // factors -- they are pure 0/1 flags. Cross-section at qcut X is
+  //     sigma(X) = sum_evt  w_nominal[evt] * FxFx_qCutAccept_<X>[evt]
+  // HepMC2 has no per-event attribute container, so the weight slot is the
+  // only flexible per-event holder; the FxFx_qCutAccept_ prefix signals
+  // that these are flags, not continuous reweights.
   std::vector<double> qCutList = pythia.settings.pvec("JetMatching:qCutList");
   bool doQCutVariation = isFxFx && !qCutList.empty();
-  std::ofstream qcutSidecar;
   JetMatchingMadgraph* jmHook = nullptr;
+  std::vector<std::string> qCutWeightNames;
   if (doQCutVariation) {
     jmHook = dynamic_cast<JetMatchingMadgraph*>(combined.hook.get());
     if (!jmHook) {
@@ -74,12 +78,12 @@ int main() {
                 << "JetMatchingMadgraph hook (FxFx scheme = 1)." << std::endl;
       return 1;
     }
-    qcutSidecar.open("Pythia8.qcut_accept");
-    qcutSidecar << "# qcut_grid:";
-    for (double q : qCutList) qcutSidecar << ' ' << q;
-    qcutSidecar << "\n# evt_idx";
-    for (double q : qCutList) qcutSidecar << " a_" << q;
-    qcutSidecar << '\n';
+    qCutWeightNames.reserve(qCutList.size());
+    for (double q : qCutList) {
+      std::ostringstream name;
+      name << "FxFx_qCutAccept_" << q;
+      qCutWeightNames.push_back(name.str());
+    }
   }
 
   // Initialise Pythia.
@@ -133,23 +137,23 @@ int main() {
     HepMC::GenCrossSection xsec;
     xsec.set_cross_section( sigmaTotal, pythia.info.sigmaErr() );
     hepmcevt->set_cross_section( xsec );
+
+    // q-cut variation: push per-event accept flags as named HepMC weights.
+    // flags[i] = 1 means the matching at qCutList[i] vetoed the event, so
+    // we store (1 - flags[i]) so that "1" denotes "kept". Pure 0/1 flag,
+    // not folded with the nominal weight. Must be done before serialization.
+    if (doQCutVariation) {
+      const std::vector<int>& flags = jmHook->getVetoVector();
+      for (size_t i = 0; i < flags.size(); ++i)
+        hepmcevt->weights()[qCutWeightNames[i]] =
+          static_cast<double>(1 - flags[i]);
+    }
+
     // Write the HepMC event to file. Done with it.
     ascii_io << hepmcevt;
 
-    // q-cut variation: write per-event accept-flag row to the sidecar.
-    // flags[i] = 1 means the matching at qCutList[i] vetoed the event;
-    // we write (1 - flags[i]) so that "1" denotes "kept".
-    if (doQCutVariation) {
-      const std::vector<int>& flags = jmHook->getVetoVector();
-      qcutSidecar << hepmcevt->event_number();
-      for (size_t i = 0; i < flags.size(); ++i)
-        qcutSidecar << ' ' << (1 - flags[i]);
-      qcutSidecar << '\n';
-    }
-
     delete hepmcevt;
   }
-  if (doQCutVariation) qcutSidecar.close();
 
   pythia.stat();
   if (isFxFx){
