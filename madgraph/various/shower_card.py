@@ -395,7 +395,10 @@ class ShowerCard(banner.RunCard):
             else:
                 raise ShowerCardError('Unknown key: %s = %s' % (key, value))
             try:
-                line = '%s=%s' % (self.names_dict[key][self.shower].upper(), value.upper())
+                if key == 'pythia8_options':
+                    line = '%s=%s' % (self.names_dict[key][self.shower].upper(), value)
+                else:
+                    line = '%s=%s' % (self.names_dict[key][self.shower].upper(), value.upper())
                 lines.append(line)
             except KeyError:
                 pass

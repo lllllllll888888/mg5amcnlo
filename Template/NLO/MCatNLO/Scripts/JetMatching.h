@@ -2222,8 +2222,23 @@ inline bool JetMatchingMadgraph::doVetoPartonLevelEarly(const Event& event) {
     return false;
   }
 
-  // Variation mode: compute veto for nominal AND every variation across all
-  // iTypes. Don't short-circuit because we need per-variation results.
+  // Variation mode: run the SAME full matching logic Pythia uses for the
+  // nominal veto, but at each variation qCut, by temporarily swapping the
+  // member qCutSq. This is the "just look where Pythia decides at qCut and
+  // evaluate at the variations too" approach — no approximation.
+  //
+  // Per iType, the no-arg matchPartonsToJets{Light,Heavy,Other}() dispatch
+  // reads member qCutSq and applies the full FxFx matching logic
+  // (clustering down to qCut, counting nCLjets, comparing to nRequested,
+  // doing jet-parton matching). Swapping qCutSq → identical logic at the
+  // variation scale.
+  //
+  // Side effects: the iType=0 nominal call goes through matchPartonsToJets()
+  // (the dispatcher) which writes setDJR and set_nMEpartons. The variation
+  // calls go directly to matchPartonsToJets{Light,Heavy,Other}() so they
+  // skip those side effects (they would otherwise overwrite the nominal DJR
+  // / nMEpartons book-keeping).
+  const double savedQCutSq = qCutSq;
   bool nominalVetoed = false;
   vector<bool> varVetoed(qCutListVec.size(), false);
 
@@ -2231,30 +2246,36 @@ inline bool JetMatchingMadgraph::doVetoPartonLevelEarly(const Event& event) {
     jetAlgorithmInput(event, iType);
     runJetAlgorithm();
 
-    // Nominal: existing dispatch sets DJR / nMEpartons for iType==0 and
-    // runs the matching at member qCutSq.
+    // Nominal: full dispatcher at member qCutSq (= savedQCutSq).
+    qCutSq = savedQCutSq;
     if (!nominalVetoed && matchPartonsToJets(iType)) nominalVetoed = true;
 
-    // Variations: parameterised entries — no state side-effects.
+    // Variations: swap qCutSq, call the type-specific matcher directly so
+    // we don't trigger the dispatcher's setDJR / set_nMEpartons side effects.
     for (size_t v = 0; v < qCutSqListVec.size(); ++v) {
       if (varVetoed[v]) continue;
-      double qSqV = qCutSqListVec[v];
+      qCutSq = qCutSqListVec[v];
       bool typeVeto = false;
-      if      (iType == 0) typeVeto = (matchPartonsToJetsLight(qSqV) > 0);
-      else if (iType == 1) typeVeto = (matchPartonsToJetsHeavy(qSqV) > 0);
-      else                 typeVeto = (matchPartonsToJetsOther(qSqV) > 0);
+      if      (iType == 0) typeVeto = (matchPartonsToJetsLight()  > 0);
+      else if (iType == 1) typeVeto = (matchPartonsToJetsHeavy()  > 0);
+      else                 typeVeto = (matchPartonsToJetsOther()  > 0);
       if (typeVeto) varVetoed[v] = true;
     }
   }
+  // Restore qCutSq.
+  qCutSq = savedQCutSq;
 
   vetoDecisionList.reserve(qCutListVec.size());
   for (size_t v = 0; v < qCutListVec.size(); ++v)
     vetoDecisionList.push_back(varVetoed[v] ? 1 : 0);
 
-  // Variation mode: never veto in the hook. Driver writes per-variation
-  // accept flags from getVetoVector(). Note: nominalVetoed is computed but
-  // not returned — analyses can recover the nominal cross-section from the
-  // appropriate Weight_MERGING= entry in the sidecar/HepMC.
+  // Variation mode: return false so Pythia keeps EVERY event in the HEPMC,
+  // regardless of whether it would have been vetoed at the nominal qCut.
+  // The per-qCut accept flags (including for the nominal qCut, if it appears
+  // in qCutList) are exposed via getVetoVector(); the analyst recovers
+  //     sigma(qCut) = sum_evt  w_nominal[evt] * FxFx_qCutAccept_<qCut>[evt]
+  // so a single run yields cross-sections at every variation qCut without
+  // re-showering. (nominalVetoed is computed but intentionally not returned.)
   return false;
 }
 

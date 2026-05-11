@@ -138,15 +138,31 @@ int main() {
     xsec.set_cross_section( sigmaTotal, pythia.info.sigmaErr() );
     hepmcevt->set_cross_section( xsec );
 
-    // q-cut variation: push per-event accept flags as named HepMC weights.
-    // flags[i] = 1 means the matching at qCutList[i] vetoed the event, so
-    // we store (1 - flags[i]) so that "1" denotes "kept". Pure 0/1 flag,
-    // not folded with the nominal weight. Must be done before serialization.
+    // q-cut variation: push per-event accept flags as named HepMC weights
+    // FxFx_qCutAccept_<q>. Pure 0/1 flags (1 = kept, 0 = vetoed at that qCut).
+    // Cross-section at qcut X recovered as
+    //     sigma(X) = sum_evt  w_nominal[evt] * FxFx_qCutAccept_<X>[evt]
+    //
+    // IMPORTANT: doVetoPartonLevelEarly is NOT called by Pythia for events
+    // with no ME jets (e.g. Z+0j, where there's nothing to merge). For those
+    // events, jmHook->getVetoVector() returns either empty (first event) or
+    // STALE data from the previous hook call. To handle this safely, we
+    // default every flag to 1 (accept) — Z+0j is unconditionally accepted at
+    // any qCut — and only overwrite when the hook produced fresh decisions.
+    //
+    // Freshness signal: the JetMatching.h refactor pushes exactly
+    // qCutListVec.size() entries when it runs. If getVetoVector().size()
+    // doesn't match, the hook didn't fire for THIS event ⇒ keep defaults.
     if (doQCutVariation) {
+      // Default: accept (Z+0j and any "hook didn't fire" case).
+      for (size_t i = 0; i < qCutList.size(); ++i)
+        hepmcevt->weights()[qCutWeightNames[i]] = 1.0;
       const std::vector<int>& flags = jmHook->getVetoVector();
-      for (size_t i = 0; i < flags.size(); ++i)
-        hepmcevt->weights()[qCutWeightNames[i]] =
-          static_cast<double>(1 - flags[i]);
+      if (flags.size() == qCutList.size()) {
+        for (size_t i = 0; i < flags.size(); ++i)
+          hepmcevt->weights()[qCutWeightNames[i]] =
+            static_cast<double>(1 - flags[i]);
+      }
     }
 
     // Write the HepMC event to file. Done with it.
