@@ -25,6 +25,7 @@ if sys.version_info < (3, 7):
    sys.exit('MadGraph5_aMC@NLO works with python 3.7 or higher.\n\
               Please upgrade your version of python.')
 if sys.version_info[1] < 10:
+    import logging
     logging.warning("\033[91mSupport for Python3.9 (and below) has been dropped since end of 2025. Please consider update your version of Python. Continue at your own risk \033[0m")
 
     
