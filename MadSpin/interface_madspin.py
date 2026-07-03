@@ -1767,6 +1767,15 @@ class MadSpinInterface(extended_cmd.Cmd):
                 maxwgt = max(wgt, maxwgt)
             all_maxwgt.append(maxwgt.real)
         print(f"all_maxwgt = {all_maxwgt}")
+        if not all(math.isfinite(w) for w in all_maxwgt):
+            nbad = sum(1 for w in all_maxwgt if not math.isfinite(w))
+            raise Exception(
+                "MadSpin onshell: %d/%d probed max-weights are non-finite (inf/NaN). "
+                "This means a zero-width resonance propagator in the full matrix element "
+                "(p^2=M^2, Gamma=0 -> 1/0). The events' banner must import a decay-time "
+                "model restriction with a FINITE W width (e.g. ...-with_b_mass_no_width_msw, "
+                "the value supplied via the banner DECAY 24 line). Aborting instead of "
+                "hanging in the accept/reject loop." % (nbad, len(all_maxwgt)))
         all_maxwgt.sort(reverse=True)
         assert all_maxwgt[0] >= all_maxwgt[1], "ERROR: "
         decay_tools=madspin.decay_misc()

@@ -689,6 +689,7 @@ class ReweightInterface(FxFxEWSudakovMixin, extended_cmd.Cmd):
 
 
         self.lhe_input.seek(0)
+        count_errors = 0
         # Reset event counter for fresh enumeration in Sudakov loop
         fxfx_ewsudakov.CURRENT_EVENT_ID = 0
         for event_nb,event in enumerate(self.lhe_input):
@@ -756,13 +757,9 @@ class ReweightInterface(FxFxEWSudakovMixin, extended_cmd.Cmd):
                     cross[key] = value / (event_nb+1)
                 
         running_time = misc.format_timer(time.time()-start)
-        logger.info('All event done  (nb_event: %s) %s' % (event_nb+1, running_time))
+        logger.info('All event done  (nb_event: %s) %s' % (event_nb+1, running_time))     
         if self.inc_sudakov:
-            # Per-run FKS-mapping / clustering-quality accounting. No event is
-            # ever thrown away: fallbacks are counted, and their handling is
-            # controlled by fxfx_ewsudakov.FKS_FALLBACK_POLICY.
-            for line in fxfx_ewsudakov.fks_accounting_summary().splitlines():
-                logger.info(line)
+            logger.info('Number of events thrown away due to large Sudakov: %s' % str(count_errors))   
         
         if self.output_type == "default":
             output.write('</LesHouchesEvents>\n')
@@ -1484,17 +1481,6 @@ class ReweightInterface(FxFxEWSudakovMixin, extended_cmd.Cmd):
         if not ((abs(initial.px) < 1e-6 * initial.E) and (abs(initial.py) < 1e-6 * initial.E)):
             for p in event_to_sud:
                 p.set_momentum(lhe_parser.FourMomentum(p).rotate_to_z(prot=lhe_parser.FourMomentum(initial)))
-
-        # After boost+rotate, the initial state is algebraically (E/2, 0, 0, +/-E/2)
-        # but carries ~10^-7 x E numerical residue from rotate_to_z. Enforce the
-        # invariant exactly before calling set_initial_mass_to_zero so its strict
-        # precondition cannot be violated by accumulated operator roundoff.
-        p0, p1 = event_to_sud[0], event_to_sud[1]
-        E_in   = abs(p0.E) + abs(p1.E)
-        pz_abs = (abs(p0.pz) + abs(p1.pz)) / 2.0
-        sign0  = +1.0 if p0.pz >= 0 else -1.0
-        p0.set_momentum(lhe_parser.FourMomentum([E_in/2.0, 0.0, 0.0,  sign0 * pz_abs]))
-        p1.set_momentum(lhe_parser.FourMomentum([E_in/2.0, 0.0, 0.0, -sign0 * pz_abs]))
 
         # Set all light quarks and lepton masses to zero in event file
         #self.set_final_jet_mass_to_zero(event_to_sud)
@@ -2563,40 +2549,25 @@ class ReweightInterface(FxFxEWSudakovMixin, extended_cmd.Cmd):
                 self.compile_SubProcess_dir(pdir)
 
 
-    def compile_SubProcess_dir(self, Sdir, procname=None):
-        """compile a full Subprocess directory.
-
-        procname: if given, passed to make as a command-line override
-        'PROCNAME=<procname>'. This forces a UNIQUE Fortran ME-library soname
-        (liball<procname>_<tag>me.so) and matching DT_NEEDED for this directory.
-        Required for the density modules (rw_me_density_prod / rw_me_density_decay):
-        the makefile's 'PROCNAME= $(notdir $(dir $(abspath $(HERE))))' evaluates to
-        EMPTY (trailing-slash/notdir), so without this every density dir links an
-        identically-named 'liball_<tag>me.so' with an identical DT_SONAME. glibc
-        then satisfies the two extensions' bare-soname DT_NEEDED by matching the
-        FIRST-loaded copy (prod), so the decay extension binds to prod's symbols
-        and get_pdg_order() returns prod's process table -> decay density matrix C
-        fails -> EW-Sudakov reweight silently falls back to scalar. A make CLI
-        assignment overrides the makefile's unconditional '=' (an env var would not,
-        unlike MENUM which the makefile sets only 'ifeq undefined')."""
+    def compile_SubProcess_dir(self, Sdir):
+        """compile a full Subprocess directory"""
 
         if self.mother:
             nb_core = self.mother.options['nb_core'] if self.mother.options['run_mode'] !=0 else 1
         else:
             nb_core = 1
-        extra = ['PROCNAME=%s' % procname] if procname else []
         os.environ['MENUM'] = '2'
-        try:
-            misc.compile(['all_matrix2py.so'] + extra, cwd=Sdir, nb_core=nb_core)
+        try: 
+            misc.compile(['all_matrix2py.so'], cwd=Sdir, nb_core=nb_core)
         except Exception as e:
-            misc.compile(['all_matrix2py.so'] + extra, cwd=Sdir, nb_core=1)
+            misc.compile(['all_matrix2py.so'], cwd=Sdir, nb_core=1)
 
         if not (self.second_model or self.second_process or self.dedicated_path):
             os.environ['MENUM'] = '3'
             try:
-                misc.compile(['all_matrix3py.so'] + extra, cwd=Sdir, nb_core=nb_core)
+                misc.compile(['all_matrix3py.so'], cwd=Sdir, nb_core=nb_core)
             except Exception as e:
-                misc.compile(['all_matrix3py.so'] + extra, cwd=Sdir, nb_core=1)
+                misc.compile(['all_matrix3py.so'], cwd=Sdir, nb_core=1)
 
 
     def _compile_density_subprocesses(self):
@@ -2609,13 +2580,7 @@ class ReweightInterface(FxFxEWSudakovMixin, extended_cmd.Cmd):
             if not os.path.isdir(sub_dir):
                 continue
             logger.info('Compiling density modules in %s', sub_dir)
-            # Pass a UNIQUE PROCNAME so prod/decay build distinct ME-lib sonames
-            # (liball<dir_name>_<tag>me.so). Without this both link an identical
-            # 'liball_<tag>me.so'; glibc's soname dedup then makes the second-loaded
-            # density module bind to the first's Fortran symbols (decay -> prod),
-            # so decay get_pdg_order() is wrong and the decay density matrix C
-            # lookup fails. See compile_SubProcess_dir docstring.
-            self.compile_SubProcess_dir(sub_dir, procname=dir_name)
+            self.compile_SubProcess_dir(sub_dir)
 
     def load_density_modules(self):
         """Load density matrix modules from the dedicated density directories."""
@@ -2663,24 +2628,6 @@ class ReweightInterface(FxFxEWSudakovMixin, extended_cmd.Cmd):
                 native_mod_name = 'all_matrix%spy' % tag
                 if native_mod_name in sys.modules:
                     del sys.modules[native_mod_name]
-                # CRITICAL: mirror the "ctypes trick" of load_module (see :2722-2736).
-                # The prod and decay density f2py extensions share identical exported
-                # symbols (get_pdg_order_, py_get_density_, m*_process_nhel_) and their
-                # ME libs share the SAME soname "liball_<tag>me.so". Prod is loaded
-                # first into the GLOBAL symbol namespace, so when the decay extension
-                # is imported its NEEDED[liball_<tag>me.so] is silently satisfied by the
-                # already-loaded prod lib (soname match precedes RPATH), binding decay's
-                # undefined f77_get_pdg_order_ to prod's table. Pre-loading THIS dir's
-                # ME lib by absolute path with RTLD_DEEPBIND forces the extension to bind
-                # its own Fortran. Filename here is "liball_<tag>me.so" (no onedir prefix,
-                # unlike load_module which uses "liball<onedir>_<tag>me.so").
-                import ctypes
-                alllib = pjoin(pdir, 'liball_%sme.so' % tag)
-                if os.path.exists(alllib):
-                    try:
-                        ctypes.CDLL(alllib, mode=os.RTLD_GLOBAL | os.RTLD_DEEPBIND)
-                    except Exception as err:
-                        fxfx_ewsudakov._dbg('ctypes pre-load failed for %s: %s', alllib, err)
                 try:
                     if six.PY3:
                         import importlib
@@ -2710,14 +2657,7 @@ class ReweightInterface(FxFxEWSudakovMixin, extended_cmd.Cmd):
         hel_dict = {}
         for prefix in prefix_set:
             if hasattr(mymod, '%sprocess_nhel' % prefix):
-                # Transfer nhel from the Fortran common block into the f2py wrapper,
-                # then read the PREFIXED member (e.g. m0_process_nhel.m0_nhel). The bare
-                # `.nhel` does NOT exist on the f2py common-block object -> AttributeError
-                # ('fortran' object has no attribute 'nhel'). Matches the canonical
-                # scalar/virtual loader below; verified against the density ME's f2py
-                # symbols (m0_get_nhel_entry, m0_process_nhel.m0_nhel).
-                getattr(mymod, '%sget_nhel_entry' % prefix)()
-                nhel = getattr(getattr(mymod, '%sprocess_nhel' % prefix), '%snhel' % prefix)
+                nhel = getattr(mymod, '%sprocess_nhel' % prefix).nhel
                 hel_dict[prefix] = {}
                 for i, onehel in enumerate(zip(*nhel)):
                     hel_dict[prefix][tuple(onehel)] = i + 1

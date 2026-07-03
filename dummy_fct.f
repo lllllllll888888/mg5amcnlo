@@ -96,24 +96,40 @@ c      'bias' = event_norm
 c
       implicit none
       include 'nexternal.inc'
-      double precision bias_wgt,p(0:3,nexternal),H_T
-      integer ipdg(nexternal),i
+      double precision bias_wgt,p(0:3,nexternal)
+      double precision pww(0:3),mww2
+      integer ipdg(nexternal),i,mu,nW
 
       bias_wgt=1d0
 
-c How to enhance the tails is very process dependent. For example for
-c top quark production one could use:
-c      do i=1,nexternal
-c         if (ipdg(i).eq.6) then
-c            bias_wgt=sqrt(p(1,i)**2+p(2,i)**2)**3
-c         endif
-c      enddo
-c Or to use H_T^2 one does     
-      H_T=0d0
-      do i=3,nexternal
-         H_T=H_T+sqrt(max(0d0,(p(0,i)+p(3,i))*(p(0,i)-p(3,i))))
+c Bias generation towards large M(W+W-): the EW Sudakov logarithms grow
+c with the hard scale s-hat = M(W+W-)^2, so we want the high-mass tail
+c densely sampled. The bias is divided back out of the stored event
+c weight (event_norm = bias, set in generate.sh), so the integrated cross
+c section is preserved -- only the per-event weight spread grows.
+c M(W+W-)^2 is IR-safe: the W's are massive colour singlets, so soft and
+c collinear QCD radiation leave the reconstructed pair mass smooth.
+      do mu=0,3
+         pww(mu)=0d0
       enddo
-      bias_wgt=H_T**2
+      nW=0
+      do i=3,nexternal
+         if (abs(ipdg(i)).eq.24) then
+            nW=nW+1
+            do mu=0,3
+               pww(mu)=pww(mu)+p(mu,i)
+            enddo
+         endif
+      enddo
+c Guard: if the two W's are not both present (should never happen for
+c p p > w+ w- [QCD]) fall back to an unbiased weight rather than bias on
+c a malformed system.
+      if (nW.ne.2) then
+         bias_wgt=1d0
+         return
+      endif
+      mww2=pww(0)**2-pww(1)**2-pww(2)**2-pww(3)**2
+      bias_wgt=max(mww2,0d0)
       return
       end
 

@@ -40,6 +40,11 @@ if [ "$SHOWER" == "HERWIG6" ] || [ "$SHOWER" == "PYTHIA6Q" ] || [ "$SHOWER" == "
 
 elif [ "$SHOWER" == "PYTHIA8" ] ; then
     if [ -f config.sh ] ; then source config.sh ; fi
+    awk '/^[[:space:]]*JetMatching:qCutList[[:space:]]*=/{
+      n=index($0,"="); lhs=substr($0,1,n-1); rhs=substr($0,n+1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/,"",rhs); gsub(/[[:space:]]+/,",",rhs)
+      print lhs"= "rhs; next
+    } {print}' Pythia8.cmd > Pythia8.cmd.tmp && mv Pythia8.cmd.tmp Pythia8.cmd
     ./Pythia8.exe Pythia8.cmd > mcatnlo_run.log 2>&1
 fi
 
